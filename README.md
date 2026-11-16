@@ -1,7 +1,7 @@
 # SimpleTouch
 
 MagicMouse自定义触控手势。
-本程序在MagicMouse-2代 + macOS-27.0中编译验证，未对Intel版本macOS做适配。
+本程序在MagicMouse2 + macOS-27中编译验证，未对Intel版本macOS做适配。
 本程序由人工设计验证，deepseek-v4.1-flash编码。
 
 ## 手势映射

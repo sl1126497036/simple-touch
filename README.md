@@ -1,6 +1,8 @@
 # SimpleTouch
 
-妙控鼠标（Magic Mouse）多指手势引擎。直接读取触摸层数据，在鼠标按下时回看一小段时间内的触摸帧来判定手指数，解决常规点按判定在妙控鼠标上把单击误判成多指的问题。
+MagicMouse自定义触控手势。
+本程序在MagicMouse-2代 + macOS-27.0中编译验证，未对Intel版本macOS做适配。
+本程序由人工设计验证，deepseek-v4.1-flash编码。
 
 ## 手势映射
 
@@ -52,13 +54,13 @@
 
 ### 添加自定义绑定
 
-如“四指上滑打开访达”：
+如：“四指上滑打开访达”：
 
 ```json
 { "fingers": 4, "gesture": "swipeUp", "action": { "kind": "openApp", "value": "com.apple.finder" } }
 ```
 
-如“三指左滑发送按键组合”：
+如：“三指左滑发送按键组合”：
 
 ```json
 { "fingers": 3, "gesture": "swipeLeft", "action": { "kind": "keyShortcut", "value": "left", "modifiers": ["control"] } }

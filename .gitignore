@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# 构建产物
+SimpleTouch.app/
+*.app/
+*.o
+*.dSYM/
+SimpleTouch-capture
+SimpleTouch-learn
+
+# 图标预览 / 临时图
+icon-preview.png
+
+# 备份文件
+*.bak
+*.orig
+*~
+
+# 本地工具与会话数据
+.workbuddy/
+
+# 日志
+*.log

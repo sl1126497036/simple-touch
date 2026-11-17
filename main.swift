@@ -114,7 +114,6 @@ struct BindingParams {
     /// 的距离有限，通常只有满量程 5%~12%，阈值必须按这个量级设。
     var threshold: Double = 0.03
     var maxDurationMs: Double = 2500  // 滑动：最长时长（慢速滑动也要放行）
-    var invert: Bool = false          // 滑动：上下方向反转
 
     init() {}
 
@@ -123,7 +122,6 @@ struct BindingParams {
         cooldownMs = tuning.cooldownMs
         threshold = tuning.swipeThreshold
         maxDurationMs = tuning.swipeMaxDurationMs
-        invert = tuning.swipeInvert
     }
 }
 
@@ -166,7 +164,6 @@ struct TuningConfig {
     var cooldownMs: Double = 450
     var swipeThreshold: Double = 0.03
     var swipeMaxDurationMs: Double = 2500
-    var swipeInvert: Bool = false
     /// 手指数容错：允许实测比绑定多一根手指也算命中，取值 0 或 1。
     /// 默认 0。设为 1 会让三指动作命中二指绑定，只在识别确实不稳定时才用。
     var fingerTolerance: Int = 0
@@ -223,7 +220,6 @@ enum ConfigStore {
         "cooldownMs": 450,
         "swipeThreshold": 0.03,
         "swipeMaxDurationMs": 2500,
-        "swipeInvert": false,
         "fingerTolerance": 0,
         "edgeMargin": 0,
         "debug": false
@@ -253,7 +249,6 @@ enum ConfigStore {
             if let v = t["cooldownMs"] as? Double { cfg.tuning.cooldownMs = v }
             if let v = t["swipeThreshold"] as? Double { cfg.tuning.swipeThreshold = v }
             if let v = t["swipeMaxDurationMs"] as? Double { cfg.tuning.swipeMaxDurationMs = v }
-            if let v = t["swipeInvert"] as? Bool { cfg.tuning.swipeInvert = v }
             if let v = t["fingerTolerance"] as? Int { cfg.tuning.fingerTolerance = v }
             if let v = t["edgeMargin"] as? Double { cfg.tuning.edgeMargin = v }
             if let v = t["debug"] as? Bool { cfg.tuning.debug = v }
@@ -294,7 +289,6 @@ enum ConfigStore {
         if let v = d["cooldownMs"] as? Double { p.cooldownMs = v }
         if let v = d["threshold"] as? Double { p.threshold = v }
         if let v = d["maxDurationMs"] as? Double { p.maxDurationMs = v }
-        if let v = d["invert"] as? Bool { p.invert = v }
         return p
     }
 
@@ -320,8 +314,7 @@ enum ConfigStore {
                         + "      \"params\": { \"windowMs\": \(Int(p.windowMs)), "
                         + "\"cooldownMs\": \(Int(p.cooldownMs)), "
                         + "\"threshold\": \(String(format: "%.2f", p.threshold)), "
-                        + "\"maxDurationMs\": \(Int(p.maxDurationMs)), "
-                        + "\"invert\": \(p.invert) } }")
+                        + "\"maxDurationMs\": \(Int(p.maxDurationMs)) } }")
         }
 
         let t = cfg.tuning
@@ -335,7 +328,6 @@ enum ConfigStore {
             "cooldownMs": \(Int(t.cooldownMs)),
             "swipeThreshold": \(String(format: "%.2f", t.swipeThreshold)),
             "swipeMaxDurationMs": \(Int(t.swipeMaxDurationMs)),
-            "swipeInvert": \(t.swipeInvert),
             "fingerTolerance": \(t.fingerTolerance),
             "edgeMargin": \(String(format: "%.2f", t.edgeMargin)),
             "debug": \(t.debug)
@@ -731,6 +723,9 @@ enum KeyMap {
 // MARK: - 动作执行
 
 enum ActionRunner {
+    /// 显示桌面按住的按键状态
+    private static var desktopHeld = false
+
     static func perform(_ spec: ActionSpec) {
         switch spec.kind {
         case "preset":
@@ -761,13 +756,12 @@ enum ActionRunner {
         case "spotlight":
             sendKey(49, flags: .maskCommand)
         case "missioncontrol":
-            // 直接唤起 Mission Control，比发键盘事件可靠
-            run("/usr/bin/open", ["-b", "com.apple.exposelauncher"])
+            // open -b 只能把面板唤起一瞬间，随后关掉；直接发系统快捷键
+            sendKey(126, flags: [.maskControl, .maskSecondaryFn])
         case "appexpose":
             sendKey(125, flags: [.maskControl, .maskSecondaryFn])
         case "showdesktop":
-            // 系统里“显示桌面”绑的是 F11 + fn，缺 fn 标志系统无法识别
-            sendKey(103, flags: [.maskSecondaryFn])
+            toggleDesktopHold()
         case "none", "":
             break
         default:
@@ -803,6 +797,77 @@ enum ActionRunner {
         p.executableURL = URL(fileURLWithPath: path)
         p.arguments = args
         try? p.run()
+    }
+
+    /// 显示桌面：系统的 F11 是按住保持、松开恢复，按一次完整按键只会闪一下。
+    /// 保持按下，再触发时松开回到窗口。
+    ///
+    /// 先按实际状态校正：用户点窗口或用别的办法恢复桌面时，
+    /// 按键状态可能已经和界面对不上，直接按 down 会失效。
+    private static func toggleDesktopHold() {
+        let shown = desktopShown()
+        if shown {
+            // 已经在桌面：补一次完整按键收回来。按键状态可能已经丢了
+            // （上次进程没来得及松开），这时单独发 up 系统不认
+            postF11(down: true)
+            usleep(20_000)
+            postF11(down: false)
+            desktopHeld = false
+            return
+        }
+        // 清掉可能残留的按下状态，否则重复的 down 系统不认
+        postF11(down: false)
+        desktopHeld = false
+        usleep(20_000)
+        postF11(down: true)
+        desktopHeld = true
+    }
+
+    private static func postF11(down: Bool) {
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let e = CGEvent(keyboardEventSource: src, virtualKey: 103, keyDown: down)
+        e?.flags = [.maskSecondaryFn]
+        e?.post(tap: .cghidEventTap)
+    }
+
+    /// 桌面是否已经显示：普通窗口都被移出了所有屏幕
+    private static func desktopShown() -> Bool {
+        guard let list = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return false }
+
+        var count: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &count)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        CGGetActiveDisplayList(count, &ids, &count)
+        let screens = ids.map { CGDisplayBounds($0) }
+        guard !screens.isEmpty else { return false }
+
+        var sawWindow = false
+        for w in list {
+            guard (w[kCGWindowLayer as String] as? Int) == 0 else { continue }
+            guard let b = w[kCGWindowBounds as String] as? [String: CGFloat],
+                  let width = b["Width"], width > 20 else { continue }
+            sawWindow = true
+            // 判中心点而不是相交：窗口被推出去后边缘还会露一点，用相交会永远判成没显示
+            let center = CGPoint(x: (b["X"] ?? 0) + width / 2,
+                                 y: (b["Y"] ?? 0) + (b["Height"] ?? 0) / 2)
+            if screens.contains(where: { $0.contains(center) }) { return false }
+        }
+        return sawWindow
+    }
+
+    /// 退出前松开，不然 F11 会一直停在按下状态
+    static func releaseHeldKeys() {
+        guard desktopHeld else { return }
+        postF11(down: false)
+        desktopHeld = false
+    }
+
+    /// 上次进程被强杀时来不及松开 F11，启动时先补一次
+    static func clearStaleKeyState() {
+        postF11(down: false)
+        desktopHeld = false
     }
 }
 
@@ -937,8 +1002,11 @@ final class StatusBarController: NSObject {
         super.init()
 
         if let button = item.button {
-            button.image = Self.makeStatusIcon(dark: Self.menuBarIsDark(button))
+            let dark = Self.menuBarIsDark(button)
+            button.image = Self.makeStatusIcon(dark: dark)
             button.toolTip = "Simple Touch"
+            // 记下初值，轮询第一次比对时不必重画
+            iconSignature = dark ? "dark" : "light"
         }
 
         // 菜单栏外观不一定与系统外观一致：自动模式下它跟着壁纸明暗自变，
@@ -1206,8 +1274,8 @@ final class Engine {
                 if horizontal {
                     direction = sign > 0 ? "swipeRight" : "swipeLeft"
                 } else {
-                    let up = binding.params.invert ? (sign < 0) : (sign > 0)
-                    direction = up ? "swipeUp" : "swipeDown"
+                    // 上下方向按绑定本身判定：想让下滑变上滑，直接把绑定的手势改掉
+                    direction = sign > 0 ? "swipeUp" : "swipeDown"
                 }
                 guard direction == binding.gesture else { continue }
 
@@ -1635,6 +1703,7 @@ final class Engine {
             CFMachPortInvalidate(tap)
         }
         if stopDaemon { LaunchAtLogin.unload() }
+        ActionRunner.releaseHeldKeys()
         Log.err("\(reason)，已停止监听并退出")
         exit(1)
     }
@@ -1873,8 +1942,19 @@ let config = ConfigStore.load()
 let dryRun = argv.contains("--dry-run")
 let verbose = argv.contains("--verbose") || config.tuning.debug
 
-signal(SIGINT) { _ in exit(0) }
-signal(SIGTERM) { _ in exit(0) }
+// 退出前要松开可能按住的 F11，所以信号处理走主队列，不在信号上下文里直接退出
+var exitSignalSources: [DispatchSourceSignal] = []
+for sig in [SIGINT, SIGTERM] {
+    signal(sig, SIG_IGN)
+    let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+    src.setEventHandler {
+        Log.info("收到退出信号")
+        ActionRunner.releaseHeldKeys()
+        exit(0)
+    }
+    src.resume()
+    exitSignalSources.append(src)
+}
 
 Log.info("Simple Touch 启动\(dryRun ? "（观察模式）" : "")")
 if config.bindings.isEmpty {
@@ -1897,6 +1977,7 @@ guard engine.start() else {
 // 用户退出过一次之后守护 job 是卸载状态，手动打开时补回来
 if !dryRun {
     LaunchAtLogin.ensureRegistered()
+    ActionRunner.clearStaleKeyState()
 }
 
 // 看门狗走独立线程：主线程在授权变更期间可能被系统挂起，
@@ -1928,6 +2009,7 @@ let statusBar = StatusBarController(
         Log.info("退出")
         LaunchAtLogin.unload()
         engine.shutdown()
+        ActionRunner.releaseHeldKeys()
         exit(0)
     }
 )

@@ -15,6 +15,7 @@ Magic Mouse 自定义触控手势。
 | 三指上滑 | 调度中心 |
 | 三指下滑 | 显示桌面 |
 
+
 ## 构建与安装
 
 ```bash
@@ -77,7 +78,6 @@ Magic Mouse 自定义触控手势。
 | `cooldownMs` | 触发冷却：两次触发的最小间隔，防止连发                |
 | `swipeThreshold` | 连续移动距离阈值。逐帧位移累加，来回抖动会互相抵消。调大更难触发 |
 | `swipeMaxDurationMs` | 滑动的最大时长，超时不算滑动                |
-| `swipeInvert` | 上下方向对调时设为 `true`              |
 | `edgeMargin` | 边缘防误触比例                       |
 
 

@@ -245,7 +245,6 @@ struct SettingsView: View {
                 Text("滑动识别").font(.headline)
                 paramSlider("距离阈值", draft.params.threshold, 0.01...0.20, "%.2f")
                 paramSlider("最大时长 ms", draft.params.maxDurationMs, 200...2000, "%.0f")
-                Toggle("反转上下滑方向", isOn: draft.params.invert)
             }
         }
     }

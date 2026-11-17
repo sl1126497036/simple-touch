@@ -232,19 +232,19 @@ struct SettingsView: View {
             // 识别参数跟随手势类型：点按不显示滑动参数，反之亦然
             if draft.wrappedValue.isTap {
                 Text("点按识别").font(.headline)
-                paramSlider("回看窗口 ms", draft.params.windowMs, 80...600, "%.0f")
-                paramSlider("触发冷却 ms", draft.params.cooldownMs, 100...1000, "%.0f")
+                paramSlider("回看窗口", draft.params.windowMs, 80...600, "%.0f", unit: "ms")
+                paramSlider("触发冷却", draft.params.cooldownMs, 100...1000, "%.0f", unit: "ms")
             } else if draft.wrappedValue.isTouch {
                 Text("轻触识别").font(.headline)
                 paramSlider("最大位移", draft.params.threshold, 0.02...0.30, "%.2f")
-                paramSlider("触发冷却 ms", draft.params.cooldownMs, 100...1000, "%.0f")
+                paramSlider("触发冷却", draft.params.cooldownMs, 100...1000, "%.0f", unit: "ms")
                 Text("手指轻碰表面并离开，位移小于阈值时触发。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             } else {
                 Text("滑动识别").font(.headline)
                 paramSlider("距离阈值", draft.params.threshold, 0.01...0.20, "%.2f")
-                paramSlider("最大时长 ms", draft.params.maxDurationMs, 200...2000, "%.0f")
+                paramSlider("最大时长", draft.params.maxDurationMs, 200...2000, "%.0f", unit: "ms")
             }
         }
     }
@@ -320,14 +320,16 @@ struct SettingsView: View {
     }
 
     private func paramSlider(_ title: String, _ value: Binding<Double>,
-                             _ range: ClosedRange<Double>, _ format: String) -> some View {
-        HStack {
+                             _ range: ClosedRange<Double>, _ format: String,
+                             unit: String = "") -> some View {
+        let text = String(format: format, value.wrappedValue)
+        return HStack {
             Text(title).font(.caption).frame(width: 96, alignment: .leading)
             Slider(value: value, in: range)
-            Text(String(format: format, value.wrappedValue))
+            Text(unit.isEmpty ? text : text + unit)
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.secondary)
-                .frame(width: 42, alignment: .trailing)
+                .frame(width: 56, alignment: .trailing)
         }
     }
 
@@ -342,7 +344,7 @@ struct SettingsView: View {
                 Text(String(format: "%.2f", tuning.edgeMargin))
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .trailing)
+                    .frame(width: 56, alignment: .trailing)
             }
             Text("忽略靠近边缘的触点，防止手掌接触边缘造成误触。")
                 .font(.caption2)

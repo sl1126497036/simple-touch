@@ -9,9 +9,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>com.simpletouch.app</string>
 	<key>CFBundleName</key>
-	<string>SimpleTouch</string>
+	<string>Simple Touch</string>
 	<key>CFBundleDisplayName</key>
-	<string>SimpleTouch</string>
+	<string>Simple Touch</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

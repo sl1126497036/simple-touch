@@ -1,4 +1,4 @@
-// SimpleTouch 设置界面
+// Simple Touch 设置界面
 //
 // 绑定可增删，每条绑定带自己的识别参数：点按用回看窗口，滑动用位移阈值。
 import SwiftUI
@@ -338,7 +338,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("全局").font(.subheadline.weight(.semibold))
             HStack {
-                Text("边缘范围").font(.caption).frame(width: 76, alignment: .leading)
+                Text("边缘防误触").font(.caption).frame(width: 76, alignment: .leading)
                 Slider(value: $tuning.edgeMargin, in: 0...0.3)
                 Text(String(format: "%.2f", tuning.edgeMargin))
                     .font(.system(.caption2, design: .monospaced))
@@ -459,7 +459,7 @@ final class SettingsWindowController {
             backing: .buffered,
             defer: false
         )
-        w.title = "SimpleTouch 设置"
+        w.title = "Simple Touch 设置"
         w.contentView = hosting
         w.center()
         w.isReleasedWhenClosed = false

@@ -1,8 +1,8 @@
-# SimpleTouch
+# Simple Touch
 
-MagicMouse自定义触控手势。
-本程序在MagicMouse2 + macOS-27中编译验证，未对Intel版本macOS做适配。
-本程序由人工设计验证，deepseek-v4.1-flash编码。
+Magic Mouse 自定义触控手势。
+本程序在 Magic Mouse 2 + macOS 27 中编译验证，未对 Intel 版本 macOS 做适配。
+本程序由人工设计验证，deepseek-v4.1-flash 编码。
 
 ## 手势映射
 
@@ -21,7 +21,7 @@ MagicMouse自定义触控手势。
 ./install.sh
 ```
 
-首次运行需要授权辅助功能：系统设置 → 隐私与安全性 → 辅助功能 → 添加 `SimpleTouch.app`。
+首次运行需要授权辅助功能：系统设置 → 隐私与安全性 → 辅助功能 → 添加 `Simple Touch.app`。
 
 ## 配置
 
@@ -65,7 +65,7 @@ MagicMouse自定义触控手势。
 ```json
 { "fingers": 3, "gesture": "swipeLeft", "action": { "kind": "keyShortcut", "value": "left", "modifiers": ["control"] } }
 ```
-配置文件编辑后需重启 SimpleTouch 生效；设置界面中调整后点“保存”立即生效。
+配置文件编辑后需重启 Simple Touch 生效；设置界面中调整后点“保存”立即生效。
 
 
 
@@ -74,7 +74,7 @@ MagicMouse自定义触控手势。
 | 参数 | 作用                            |
 |---|-------------------------------|
 | `tapWindowMs` | 判定点按的回看窗口（毫秒）。机械按压会丢帧，窗口太小时可能把多指点按判成单指 |
-| `cooldownMs` | 两次触发的最小间隔，防止连发                |
+| `cooldownMs` | 触发冷却：两次触发的最小间隔，防止连发                |
 | `swipeThreshold` | 连续移动距离阈值。逐帧位移累加，来回抖动会互相抵消。调大更难触发 |
 | `swipeMaxDurationMs` | 滑动的最大时长，超时不算滑动                |
 | `swipeInvert` | 上下方向对调时设为 `true`              |
@@ -84,10 +84,10 @@ MagicMouse自定义触控手势。
 ## 命令行
 
 ```bash
-./SimpleTouch.app/Contents/MacOS/SimpleTouch --dry-run    # 观察模式，不拦截事件
-./SimpleTouch.app/Contents/MacOS/SimpleTouch --verbose    # 打印每次点击的判定与帧序列
-./SimpleTouch.app/Contents/MacOS/SimpleTouch --do=apps    # 执行一次动作
-./SimpleTouch.app/Contents/MacOS/SimpleTouch --windows    # 列出窗口（诊断）
+"./Simple Touch.app/Contents/MacOS/SimpleTouch" --dry-run    # 观察模式，不拦截事件
+"./Simple Touch.app/Contents/MacOS/SimpleTouch" --verbose    # 打印每次点击的判定与帧序列
+"./Simple Touch.app/Contents/MacOS/SimpleTouch" --do=apps    # 执行一次动作
+"./Simple Touch.app/Contents/MacOS/SimpleTouch" --windows    # 列出窗口（诊断）
 ```
 
 `--verbose` 会打印类似 `14:23:01.512 [d] [点击] 原始 5 触点：[1, 1, 1, 1, 1]` 的日志，用于确认误判时实际读到的帧序列。滑动时打印该段的帧数、时长与连续移动距离，用来对照阈值。配置里设 `"debug": true` 效果相同。

@@ -474,6 +474,16 @@ final class TouchBuffer {
         defer { lock.unlock() }
         return Array(currentSegment.suffix(20))
     }
+
+    /// 唤醒后清掉睡眠前的残留帧，避免旧帧参与下一次判定
+    func reset() {
+        lock.lock()
+        frames.removeAll()
+        currentSegment.removeAll()
+        lock.unlock()
+        lastMultiTime = 0
+        lastRawCount = 0
+    }
 }
 
 // MARK: - 滑动手势
@@ -597,6 +607,13 @@ final class SwipeEngine {
         }
 
         onSegmentEnd?(sample)
+    }
+
+    /// 中断当前触摸段。唤醒后段内计时早已失效，不清掉会把唤醒后的第一次触摸
+    /// 当成睡眠前那一段的延续。其余字段在下一段开始时统一初始化。
+    func reset() {
+        inSegment = false
+        segmentHadClick = false
     }
 
     /// 标记本段发生过机械点击，后续不再判定为滑动
@@ -724,14 +741,14 @@ enum ActionRunner {
             run("/usr/bin/open", [spec.value])
         case "keyShortcut":
             guard let code = KeyMap.code(for: spec.value) else {
-                Log.err("未知按键：\(spec.value)")
+                Log.err("未知按键 \(spec.value)：可用键名见 --help")
                 return
             }
             sendKey(code, flags: KeyMap.flags(spec.modifiers))
         case "shell":
             run("/bin/sh", ["-c", spec.value])
         default:
-            Log.err("未知动作类型：\(spec.kind)")
+            Log.err("未知动作类型 \(spec.kind)：支持 preset、openApp、url、keyShortcut、shell")
         }
     }
 
@@ -757,7 +774,7 @@ enum ActionRunner {
             if name.hasPrefix("exec:") {
                 run("/bin/sh", ["-c", String(name.dropFirst(5))])
             } else {
-                Log.err("未知动作：\(name)")
+                Log.err("未知预置动作 \(name)：可用名称见 --help")
             }
         }
     }
@@ -795,6 +812,11 @@ enum ActionRunner {
 ///
 /// 不让 launchd 直接执行 app 内的二进制：那样 TCC 无法识别 bundle，
 /// 会丢辅助功能权限。改为让 launchd 调 `open -a`，与手动点击启动一致。
+///
+/// open 不透传应用的退出码，launchd 的 KeepAlive 判断不了进程是否异常结束，
+/// 所以守护交给循环脚本：open -W 等到应用退出后再进下一轮。
+/// 登录瞬间 LaunchServices 未就绪、进程被系统杀掉，5 秒后都会重来。
+/// 用户主动退出前卸载 job，不会被弹回来。
 enum LaunchAtLogin {
     static let label = "com.simpletouch.app"
 
@@ -802,39 +824,48 @@ enum LaunchAtLogin {
         NSHomeDirectory() + "/Library/LaunchAgents/\(label).plist"
     }
 
-    /// 勾选状态按“配置文件在 + launchd 已登记”双重判断。
-    /// 只看文件会出现已勾选但未注册的情况。
+    private static var domain: String {
+        "gui/\(getuid())"
+    }
+
+    /// 勾选状态只看配置文件：job 在用户退出时被卸载，
+    /// 保留文件才能保证下次登录仍然自启。
     static var isEnabled: Bool {
-        FileManager.default.fileExists(atPath: plistPath) && isRegistered
+        FileManager.default.fileExists(atPath: plistPath)
     }
 
     static var isRegistered: Bool {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        p.arguments = ["list"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        do {
-            try p.run()
-        } catch {
-            return false
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        let out = String(data: data, encoding: .utf8) ?? ""
-        return out.contains(label)
+        run(["/bin/launchctl", "print", "\(domain)/\(label)"])
+    }
+
+    /// 启动时把 job 补回来。用户退出过一次之后 job 是卸载状态，
+    /// 不补的话这一轮就没有守护，进程意外退出不会再被拉起。
+    static func ensureRegistered() {
+        guard isEnabled, !isRegistered else { return }
+        _ = run(["/bin/launchctl", "enable", "\(domain)/\(label)"])
+        _ = run(["/bin/launchctl", "bootstrap", domain, plistPath])
+    }
+
+    /// 主动退出前调用：卸掉 job，守护脚本随之结束
+    static func unload() {
+        guard isRegistered else { return }
+        _ = run(["/bin/launchctl", "bootout", "\(domain)/\(label)"])
     }
 
     @discardableResult
     static func setEnabled(_ on: Bool) -> Bool {
         if on {
             guard writePlist() else { return false }
-            _ = run(["/bin/launchctl", "unload", "-w", plistPath])
-            return run(["/bin/launchctl", "load", "-w", plistPath])
+            _ = run(["/bin/launchctl", "bootout", "\(domain)/\(label)"])
+            // 旧版本用过 unload -w，会把服务记成禁用，bootstrap 之前先显式打开
+            _ = run(["/bin/launchctl", "enable", "\(domain)/\(label)"])
+            if run(["/bin/launchctl", "bootstrap", domain, plistPath]) { return true }
+            _ = run(["/bin/launchctl", "load", "-w", plistPath])
+            return isEnabled
         }
-        _ = run(["/bin/launchctl", "unload", "-w", plistPath])
+        unload()
         try? FileManager.default.removeItem(atPath: plistPath)
-        return !isEnabled
+        return !FileManager.default.fileExists(atPath: plistPath)
     }
 
     private static func writePlist() -> Bool {
@@ -846,11 +877,14 @@ enum LaunchAtLogin {
           <key>Label</key><string>\(label)</string>
           <key>ProgramArguments</key>
           <array>
-            <string>/usr/bin/open</string>
-            <string>-a</string>
-            <string>\(Bundle.main.bundlePath)</string>
+            <string>/bin/sh</string>
+            <string>-c</string>
+            <string>while true; do /usr/bin/open -g -W -a "\(Bundle.main.bundlePath)"; sleep 5; done</string>
           </array>
           <key>RunAtLoad</key><true/>
+          <key>ThrottleInterval</key><integer>10</integer>
+          <key>LimitLoadToSessionType</key><string>Aqua</string>
+          <key>ProcessType</key><string>Interactive</string>
         </dict>
         </plist>
         """
@@ -887,7 +921,11 @@ final class StatusBarController: NSObject {
     private let onReload: () -> Void
     private let onQuit: () -> Void
     private var appearanceObserver: NSKeyValueObservation?
+    private var buttonObserver: NSKeyValueObservation?
     private var themeObserver: NSObjectProtocol?
+    private var iconPoll: Timer?
+    /// 上次绘制依据的外观签名，相同就不重绘
+    private var iconSignature = ""
 
     init(onSettings: @escaping () -> Void,
          onReload: @escaping () -> Void,
@@ -899,12 +937,16 @@ final class StatusBarController: NSObject {
         super.init()
 
         if let button = item.button {
-            button.image = Self.makeStatusIcon(dark: Self.isDarkMenuBar)
-            button.toolTip = "SimpleTouch"
+            button.image = Self.makeStatusIcon(dark: Self.menuBarIsDark(button))
+            button.toolTip = "Simple Touch"
         }
 
-        // 跟随系统明暗：浅色白底黑线，深色深底白线
+        // 菜单栏外观不一定与系统外观一致：自动模式下它跟着壁纸明暗自变，
+        // 而这种变化不发主题通知。所以既观察按钮外观，也按秒比对签名兜底。
         appearanceObserver = NSApp.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
+            self?.scheduleIconRefresh()
+        }
+        buttonObserver = item.button?.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
             self?.scheduleIconRefresh()
         }
         themeObserver = DistributedNotificationCenter.default.addObserver(
@@ -913,6 +955,9 @@ final class StatusBarController: NSObject {
             queue: .main
         ) { [weak self] _ in
             self?.scheduleIconRefresh()
+        }
+        iconPoll = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.refreshIconIfNeeded()
         }
 
         let menu = NSMenu()
@@ -934,7 +979,7 @@ final class StatusBarController: NSObject {
 
         menu.addItem(.separator())
 
-        let quit = NSMenuItem(title: "退出 SimpleTouch", action: #selector(quitTapped), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "退出 Simple Touch", action: #selector(quitTapped), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
 
@@ -992,9 +1037,13 @@ final class StatusBarController: NSObject {
         return image
     }
 
-    /// 当前菜单栏是否为深色
-    private static var isDarkMenuBar: Bool {
-        NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    /// 菜单栏是否为深色。
+    ///
+    /// 必须取状态栏按钮的外观：菜单栏在自动模式下跟着壁纸走，
+    /// 与 NSApp.effectiveAppearance 经常不一致，取后者会画反底板颜色。
+    private static func menuBarIsDark(_ button: NSStatusBarButton?) -> Bool {
+        let appearance = button?.effectiveAppearance ?? NSApp.effectiveAppearance
+        return appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
     }
 
     /// 主题切换后 effectiveAppearance 有延迟，延后重绘
@@ -1004,7 +1053,17 @@ final class StatusBarController: NSObject {
     }
 
     @objc private func applyStatusIcon() {
-        item.button?.image = Self.makeStatusIcon(dark: Self.isDarkMenuBar)
+        refreshIconIfNeeded()
+    }
+
+    /// 外观签名变化时才重绘：轮询每秒一次，不做判断会一直重画
+    private func refreshIconIfNeeded() {
+        guard let button = item.button else { return }
+        let dark = Self.menuBarIsDark(button)
+        let signature = dark ? "dark" : "light"
+        guard signature != iconSignature else { return }
+        iconSignature = signature
+        button.image = Self.makeStatusIcon(dark: dark)
     }
 
     @objc private func settingsTapped() { onSettings() }
@@ -1026,6 +1085,8 @@ final class StatusBarController: NSObject {
 
     deinit {
         appearanceObserver?.invalidate()
+        buttonObserver?.invalidate()
+        iconPoll?.invalidate()
         if let themeObserver {
             DistributedNotificationCenter.default.removeObserver(themeObserver)
         }
@@ -1037,7 +1098,16 @@ final class StatusBarController: NSObject {
 final class Engine {
     private var devices: [MTDeviceRef] = []
     private var stopFn: DeviceStopFn?
+    private var startFn: StartStopFn?
+    private var frameRegister: RegisterFn?
     private var eventTap: CFMachPort?
+    private var eventTapSource: CFRunLoopSource?
+    /// 事件回调与看门狗只置位，恢复动作统一在主线程做
+    private let recoveryLock = NSLock()
+    private var recoveryPending = false
+    private var recoveryReason: String?
+    /// 上次重建时间，防止看门狗在恢复过程中反复触发
+    private var lastRecoveryAt: Double = 0
     /// 每条绑定各自的最近触发时间，用于按绑定冷却
     private var lastFire: [String: Double] = [:]
     /// 手势触发后短暂屏蔽滚动：惯性滚动会滞后于手指抬起，不挡会漏出去
@@ -1186,8 +1256,8 @@ final class Engine {
         }
 
         let createList = unsafeBitCast(s1, to: CreateListFn.self)
-        let register = unsafeBitCast(s2, to: RegisterFn.self)
-        let startDevice = unsafeBitCast(s3, to: StartStopFn.self)
+        frameRegister = unsafeBitCast(s2, to: RegisterFn.self)
+        startFn = unsafeBitCast(s3, to: StartStopFn.self)
         stopFn = unsafeBitCast(s4, to: DeviceStopFn.self)
 
         guard let list = createList() else {
@@ -1270,8 +1340,8 @@ final class Engine {
             guard let raw = CFArrayGetValueAtIndex(list, i) else { continue }
             let dev = UnsafeMutableRawPointer(mutating: raw)
             devices.append(dev)
-            register(dev, cb)
-            startDevice(dev, 0)
+            frameRegister?(dev, cb)
+            startFn?(dev, 0)
         }
 
         guard !devices.isEmpty else { return false }
@@ -1298,10 +1368,10 @@ final class Engine {
                 let engine = Unmanaged<Engine>.fromOpaque(userInfo).takeUnretainedValue()
 
                 if type == .tapDisabledByUserInput || type == .tapDisabledByTimeout {
-                    // 两种禁用都不重开。在没有授权的情况下重新 enable，tap 会进入
-                    // “启用但不放行事件”的中间态：回调不再被调用，事件也出不去，
-                    // 整个会话的鼠标和滚轮一起卡死。正确做法是立即停止监听并退出。
-                    engine.abort(type == .tapDisabledByTimeout ? "事件监听被系统停用" : "辅助功能授权被撤销")
+                    // 不在回调里重开 tap：这里拿不到可靠的授权状态，
+                    // 万一重开成“启用但不放行”的中间态，整台机器的鼠标会卡死。
+                    // 禁用状态下事件照常放行，先置位，交给主线程重建。
+                    engine.requestRecovery(type == .tapDisabledByTimeout ? "事件监听超时被停用" : "事件监听被系统停用")
                     return Unmanaged.passUnretained(event)
                 }
                 if type == .leftMouseDown { return engine.handleMouseDown(event) }
@@ -1316,6 +1386,7 @@ final class Engine {
 
         eventTap = tap
         if let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0) {
+            eventTapSource = src
             CFRunLoopAddSource(CFRunLoopGetCurrent(), src, .commonModes)
         }
         CGEvent.tapEnable(tap: tap, enable: true)
@@ -1551,26 +1622,96 @@ final class Engine {
     ///
     /// 必须在调用线程上同步做完：走主队列会等主线程空闲，而权限被撤销时
     /// 主线程正被系统挂起，退出就永远等不到，输入无法恢复。
-    func abort(_ reason: String) {
+    ///
+    /// stopDaemon 用于授权缺失这类确定性故障：守护脚本会一直重开进程，
+    /// 而重开之后照样没有授权，只会变成每 5 秒一次的启动失败循环。
+    /// 用户主动退出走 exit(0)，不会被重新拉起。
+    func abort(_ reason: String, stopDaemon: Bool = false) {
         let tap = eventTap
         eventTap = nil
+        eventTapSource = nil
         if let tap {
             CGEvent.tapEnable(tap: tap, enable: false)
             CFMachPortInvalidate(tap)
         }
+        if stopDaemon { LaunchAtLogin.unload() }
         Log.err("\(reason)，已停止监听并退出")
-        exit(0)
+        exit(1)
+    }
+
+    /// 由事件回调或看门狗置位，恢复动作在主线程执行
+    func requestRecovery(_ reason: String) {
+        recoveryLock.lock()
+        let first = !recoveryPending
+        recoveryPending = true
+        if recoveryReason == nil { recoveryReason = reason }
+        recoveryLock.unlock()
+        guard first else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.runPendingRecovery()
+        }
+    }
+
+    private func runPendingRecovery() {
+        recoveryLock.lock()
+        let reason = recoveryReason ?? "监听失效"
+        recoveryPending = false
+        recoveryReason = nil
+        recoveryLock.unlock()
+        recover(reason)
+    }
+
+    /// 睡眠唤醒、系统停用监听之后重新接管。
+    ///
+    /// 唤醒后触摸设备不再上报触点，事件监听也可能被系统禁用，
+    /// 两者都要重建，只重建其中一个的话表现就是“鼠标正常，手势没反应”。
+    func recover(_ reason: String) {
+        let now = CACurrentMediaTime()
+        guard now - lastRecoveryAt >= 1.0 else { return }
+        lastRecoveryAt = now
+        Log.info("重新接管：\(reason)")
+        restartTouchDevices()
+        guard rebuildEventTap() else {
+            abort("事件监听重建失败", stopDaemon: !AXIsProcessTrusted())
+            return
+        }
+        TouchBuffer.shared.reset()
+        SwipeEngine.shared.reset()
+    }
+
+    /// 唤醒后触摸设备需要重新 start，否则回调不再触发
+    private func restartTouchDevices() {
+        guard !devices.isEmpty else { return }
+        for dev in devices { stopFn?(dev) }
+        usleep(30_000)
+        for dev in devices { startFn?(dev, 0) }
+    }
+
+    /// 重建而不是重新 enable：全新创建的 tap 不会停在“启用但不放行”的中间态
+    private func rebuildEventTap() -> Bool {
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            if let src = eventTapSource {
+                CFRunLoopRemoveSource(CFRunLoopGetCurrent(), src, .commonModes)
+            }
+            CFMachPortInvalidate(tap)
+            eventTap = nil
+            eventTapSource = nil
+        }
+        return installEventTap()
     }
 
     /// 看门狗：授权被撤销时系统不一定发通知，主动查一次
     func watchdogTick() {
         guard eventTap != nil else { return }
+        // 授权一撤，监听仍然拦截事件但回调不再被调用，鼠标立刻卡死，
+        // 没有可以等的窗口期，必须当场退出
         if !AXIsProcessTrusted() {
-            abort("辅助功能授权已失效")
+            abort("辅助功能授权已失效", stopDaemon: true)
             return
         }
         if let tap = eventTap, !CGEvent.tapIsEnabled(tap: tap) {
-            abort("事件监听被系统停用")
+            requestRecovery("事件监听被系统停用")
         }
     }
 
@@ -1735,7 +1876,7 @@ let verbose = argv.contains("--verbose") || config.tuning.debug
 signal(SIGINT) { _ in exit(0) }
 signal(SIGTERM) { _ in exit(0) }
 
-Log.info("SimpleTouch 启动\(dryRun ? "（观察模式）" : "")")
+Log.info("Simple Touch 启动\(dryRun ? "（观察模式）" : "")")
 if config.bindings.isEmpty {
     Log.info("配置里没有任何绑定：在设置界面添加")
 } else {
@@ -1748,7 +1889,14 @@ let engine = Engine(config: config, dryRun: dryRun, verbose: verbose)
 
 guard engine.start() else {
     Log.err("启动失败：见上方错误")
+    // 没有授权时守护脚本会一直重开，重开之后仍然起不来，先卸掉
+    if !AXIsProcessTrusted() { LaunchAtLogin.unload() }
     exit(1)
+}
+
+// 用户退出过一次之后守护 job 是卸载状态，手动打开时补回来
+if !dryRun {
+    LaunchAtLogin.ensureRegistered()
 }
 
 // 看门狗走独立线程：主线程在授权变更期间可能被系统挂起，
@@ -1778,24 +1926,28 @@ let statusBar = StatusBarController(
     },
     onQuit: {
         Log.info("退出")
+        LaunchAtLogin.unload()
         engine.shutdown()
         exit(0)
     }
 )
 _ = statusBar
 
-// 权限看门狗
-//
-// 用户随时可能在系统设置里删除辅助功能授权。授权一撤销，事件监听就处于
-// 失效状态：事件被拦截但回调不再被调用，整台机器的鼠标会卡死。
-// 所以一旦发现授权被撤销，必须立即停止监听并退出，仅保留一条日志。
-if !dryRun {
-    Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
-        if !AXIsProcessTrusted() {
-            engine.abort("辅助功能授权失效")
+// 睡眠唤醒后触摸设备与事件监听都可能失效：设备不再上报触点，
+// 监听被系统禁用后事件直接放行，表现就是鼠标正常而手势没反应。
+// 唤醒后统一重建一次，触摸设备与监听都换新的。
+let workspaceCenter = NSWorkspace.shared.notificationCenter
+for wakeName in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+    workspaceCenter.addObserver(forName: wakeName, object: nil, queue: .main) { _ in
+        // 唤醒后系统重新枚举设备需要一点时间，稍后再接管
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            engine.recover("系统唤醒")
         }
     }
 }
+
+// 授权撤销的检查在后台看门狗里做：主线程那时可能已被系统挂起，
+// 挂在主队列上的定时器不会执行。
 
 Log.info("就绪")
 nsApp.run()

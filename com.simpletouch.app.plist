@@ -5,15 +5,24 @@
 	<key>Label</key>
 	<string>com.simpletouch.app</string>
 	<!-- 必须通过 open 以 app bundle 身份启动，否则 TCC 会把它当成未授权的裸二进制 -->
+	<!--
+	  open 不透传应用退出码，launchd 的 KeepAlive 判断不了进程是否正常退出，
+	  所以用一层循环脚本守护：open -W 等到应用退出后再进下一轮。
+	  -W 同时保证登录瞬间失败（LaunchServices 未就绪）时下一轮还会重试。
+	-->
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/bin/open</string>
-		<string>-a</string>
-		<string>__APP_PATH__</string>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>while true; do /usr/bin/open -g -W -a "__APP_PATH__"; sleep 5; done</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
 	<key>LimitLoadToSessionType</key>
 	<string>Aqua</string>
+	<key>ProcessType</key>
+	<string>Interactive</string>
 </dict>
 </plist>
